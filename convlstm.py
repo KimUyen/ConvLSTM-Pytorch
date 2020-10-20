@@ -7,11 +7,19 @@ import torch.nn as nn
 import torch
 import math
 
+class HadamardProduct(nn.Module):
+    def __init__(self, shape):
+        super(HadamardProduct, self).__init__()
+        self.weights = nn.Parameter(torch.Tensor(shape)).cuda()
+        
+    def forward(self, x):
+        return x*self.weights
+
 class ConvLSTMCell(nn.Module):
 
-    def __init__(self, input_dim, hidden_dim, kernel_size, stride, 
+    def __init__(self, img_size, input_dim, hidden_dim, kernel_size, stride, 
                  padding, cnn_dropout, rnn_dropout, bias=True, peephole=False,
-                 batch_norm=False, layer_norm=False):
+                 layer_norm=False):
         """
         Initialize ConvLSTM cell.
         Parameters
@@ -36,98 +44,89 @@ class ConvLSTMCell(nn.Module):
         """
 
         super(ConvLSTMCell, self).__init__()
-
+        self.input_shape = img_size
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-
         self.kernel_size = kernel_size
         self.padding = padding
         self.stride = stride
         self.bias = bias
         self.peephole = peephole
-        self.batch_norm = batch_norm
         self.layer_norm = layer_norm
         
-        self.conv = nn.Conv2d(in_channels=self.input_dim,
-                              out_channels=self.hidden_dim,
-                              kernel_size=self.kernel_size,
-                              stride = self.stride,
-                              padding=self.padding,
-                              bias=self.bias)
-        self.rnn_conv = nn.Conv2d(self.hidden_dim, out_channels=self.hidden_dim, 
+        self.out_height = int((self.input_shape[0] - self.kernel_size[0] + 2*self.padding[0])/self.stride[0] + 1)
+        self.out_width = int((self.input_shape[1] - self.kernel_size[1] + 2*self.padding[1])/self.stride[1] + 1)
+        
+        self.input_conv = nn.Conv2d(in_channels=self.input_dim, out_channels=4*self.hidden_dim,
+                                  kernel_size=self.kernel_size,
+                                  stride = self.stride,
+                                  padding=self.padding,
+                                  bias=self.bias)
+        self.rnn_conv = nn.Conv2d(self.hidden_dim, out_channels=4*self.hidden_dim, 
                                   kernel_size = self.kernel_size,
                                   padding=(math.floor(self.kernel_size[0]/2), 
                                          math.floor(self.kernel_size[1]/2)),
                                   bias=self.bias)
-
+        
+        if self.peephole is True:
+            self.weight_ci = HadamardProduct((1, self.hidden_dim, ) + self.input_shape)
+            self.weight_cf = HadamardProduct((1, self.hidden_dim, ) + self.input_shape)
+            self.weight_co = HadamardProduct((1, self.hidden_dim, ) + self.input_shape)
+            self.layer_norm_ci = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
+            self.layer_norm_cf = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
+            self.layer_norm_co = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
+        
+            
         self.cnn_dropout = nn.Dropout(cnn_dropout)
         self.rnn_dropout = nn.Dropout(rnn_dropout)
         
-        self.batch_norm_2d = nn.BatchNorm2d(self.hidden_dim)
-        self.layer_norm_x = nn.LayerNorm([4, 4], elementwise_affine=False)
-        self.layer_norm_h = nn.LayerNorm([4, 4], elementwise_affine=False)
-        
+        self.layer_norm_x = nn.LayerNorm([4*self.hidden_dim, self.out_height, self.out_width])
+        self.layer_norm_h = nn.LayerNorm([4*self.hidden_dim, self.out_height, self.out_width])
+        self.layer_norm_cnext = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
+    
     def forward(self, input_tensor, cur_state):
         h_cur, c_cur = cur_state
 
         x = self.cnn_dropout(input_tensor)
-        x_i = self.conv(x)
-        x_f = self.conv(x)
-        x_c = self.conv(x)
-        x_o = self.conv(x)
-        
-        if self.batch_norm is True:
-            x_i = self.batch_norm_2d(x_i)
-            x_f = self.batch_norm_2d(x_f)
-            x_c = self.batch_norm_2d(x_c)
-            x_o = self.batch_norm_2d(x_o)
+        x_conv = self.input_conv(x)
+        if self.layer_norm is True:
+            x_conv = self.layer_norm_x(x_conv)
+        # separate i, f, c o
+        x_i, x_f, x_c, x_o = torch.split(x_conv, self.hidden_dim, dim=1)
         
         h = self.rnn_dropout(h_cur)
-        h_i = self.rnn_conv(h)
-        h_f = self.rnn_conv(h)
-        h_c = self.rnn_conv(h)
-        h_o = self.rnn_conv(h)
-        
-        c = self.rnn_dropout(c_cur)
-        c_i = self.rnn_conv(c)
-        c_f = self.rnn_conv(c)
-        c_o = self.rnn_conv(c)
-        
-        
+        h_conv = self.rnn_conv(h)
         if self.layer_norm is True:
-            x_i = self.layer_norm_x(x_i)
-            x_f = self.layer_norm_x(x_f)
-            x_c = self.layer_norm_x(x_c)
-            x_o = self.layer_norm_x(x_o)
-            h_i = self.layer_norm_h(h_i)
-            h_f = self.layer_norm_h(h_f)
-            h_c = self.layer_norm_h(h_c)
-            h_o = self.layer_norm_h(h_o)
-            
+            h_conv = self.layer_norm_h(h_conv)
+        # separate i, f, c o
+        h_i, h_f, h_c, h_o = torch.split(h_conv, self.hidden_dim, dim=1)
+        
+
         if self.peephole is True:
-            f = torch.sigmoid((x_f + h_f) + c_f * c)
-            i = torch.sigmoid((x_i + h_i) + c_i * c)
+            f = torch.sigmoid((x_f + h_f) +  self.layer_norm_cf(self.weight_cf(c_cur)) if self.layer_norm is True else self.weight_cf(c_cur))
+            i = torch.sigmoid((x_i + h_i) +  self.layer_norm_ci(self.weight_ci(c_cur)) if self.layer_norm is True else self.weight_ci(c_cur))
         else:
             f = torch.sigmoid((x_f + h_f))
             i = torch.sigmoid((x_i + h_i))
         
         
         g = torch.tanh((x_c + h_c))
-        c_next = f * c + i * g
+        c_next = f * c_cur + i * g
         if self.peephole is True:
-            o = torch.sigmoid(x_o + h_o + c_o * c)
+            o = torch.sigmoid(x_o + h_o + self.layer_norm_co(self.weight_co(c_cur)) if self.layer_norm is True else self.weight_co(c_cur))
         else:
             o = torch.sigmoid((x_o + h_o))
+        
+        if self.layer_norm is True:
+            c_next = self.layer_norm_cnext(c_next)
         h_next = o * torch.tanh(c_next)
 
         return h_next, c_next
 
-    def init_hidden(self, batch_size, image_size):
-        height = int((image_size[0] - self.kernel_size[0] + 2*self.padding[0])/self.stride[0] + 1)
-        width = int((image_size[1] - self.kernel_size[1] + 2*self.padding[1])/self.stride[1] + 1)
-        #height, width = image_size
-        return (torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device),
-                torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device))
+    def init_hidden(self, batch_size):
+        height, width = self.out_height, self.out_width
+        return (torch.zeros(batch_size, self.hidden_dim, height, width, device=self.input_conv.weight.device),
+                torch.zeros(batch_size, self.hidden_dim, height, width, device=self.input_conv.weight.device))
 
 
 class ConvLSTM(nn.Module):
@@ -159,9 +158,9 @@ class ConvLSTM(nn.Module):
         >> output, last_state = convlstm(x)
     """
 
-    def __init__(self, input_dim, hidden_dim, kernel_size, stride, padding, 
+    def __init__(self, img_size, input_dim, hidden_dim, kernel_size, stride, padding, 
                  cnn_dropout=0.5, rnn_dropout=0.5,  
-                 batch_first=False, bias=True, peephole=False, batch_norm=False,
+                 batch_first=False, bias=True, peephole=False,
                  layer_norm=False,
                  return_sequence=True,
                  bidirectional=False):
@@ -171,18 +170,18 @@ class ConvLSTM(nn.Module):
         self.batch_first = batch_first
         self.return_sequence = return_sequence
         self.bidirectional = bidirectional
-        
-        cell_list = ConvLSTMCell(input_dim=input_dim,
-                                hidden_dim=hidden_dim,
-                                kernel_size=kernel_size,
-                                stride = stride,
-                                padding = padding,
-                                cnn_dropout=cnn_dropout,
-                                rnn_dropout=rnn_dropout,
-                                bias=bias,
-                                peephole=peephole,
-                                batch_norm=batch_norm,
-                                layer_norm=layer_norm)
+
+        cell_list = ConvLSTMCell(img_size = img_size,
+                                 input_dim=input_dim,
+                                 hidden_dim=hidden_dim,
+                                 kernel_size=kernel_size,
+                                 stride = stride,
+                                 padding = padding,
+                                 cnn_dropout=cnn_dropout,
+                                 rnn_dropout=rnn_dropout,
+                                 bias=bias,
+                                 peephole=peephole,
+                                 layer_norm=layer_norm)
 
         self.cell_list = cell_list
         
@@ -210,11 +209,9 @@ class ConvLSTM(nn.Module):
             raise NotImplementedError()
         else:
             # Since the init is done in forward. Can send image size here
-            hidden_state = self._init_hidden(batch_size=b,
-                                             image_size=(h, w))
+            hidden_state = self._init_hidden(batch_size=b)
             if self.bidirectional is True:
-                hidden_state_inv = self._init_hidden(batch_size=b,
-                                                     image_size=(h, w))
+                hidden_state_inv = self._init_hidden(batch_size=b)
 
         ## LSTM forward direction
         input_fw = input_tensor
@@ -249,6 +246,6 @@ class ConvLSTM(nn.Module):
         
         return layer_output if self.return_sequence is True else layer_output[:, -1:], last_state, last_state_inv if self.bidirectional is True else None
 
-    def _init_hidden(self, batch_size, image_size):
-        init_states = self.cell_list.init_hidden(batch_size, image_size)
+    def _init_hidden(self, batch_size):
+        init_states = self.cell_list.init_hidden(batch_size)
         return init_states

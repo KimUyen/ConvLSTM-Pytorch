@@ -9,33 +9,34 @@ class Flatten(torch.nn.Module):
         return input.view(b, seq_len, -1)
 
 class ConvLSTMNetwork(torch.nn.Module):
-    def __init__(self, input_channel, hidden_channels, kernel_size, stride, padding, num_layers):
+    def __init__(self, img_size_list, input_channel, hidden_channels, kernel_size, stride, padding, num_layers, bidirectional = False):
         super(ConvLSTMNetwork, self).__init__()
         
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
+        self.bidirectional = bidirectional
         
         convlstm_layer = []
         for i in range(num_layers):
-            layer = convlstm.ConvLSTM(input_channel, 
-                                         hidden_channels[i],
-                                         kernel_size[i],
-                                         stride[i],
-                                         padding[i],
-                                         0.2, 0.,
-                                         batch_first=True, 
-                                         bias=True, 
-                                         peephole=False, 
-                                         batch_norm=False,
-                                         layer_norm=False,
-                                         return_sequence=config.SEQUENCE_OUTPUT,
-                                         bidirectional=True)
+            layer = convlstm.ConvLSTM(img_size_list[i],
+                                    input_channel, 
+                                    hidden_channels[i],
+                                    kernel_size[i],
+                                    stride[i],
+                                    padding[i],
+                                    0.2, 0.,
+                                    batch_first=True, 
+                                    bias=True, 
+                                    peephole=True,
+                                    layer_norm=True,
+                                    return_sequence=config.SEQUENCE_OUTPUT,
+                                    bidirectional=self.bidirectional)
             convlstm_layer.append(layer)
-            input_channel = hidden_channels[i]
+            input_channel = hidden_channels[i] * (2 if self.bidirectional else 1)
            
         self.convlstm_layer = torch.nn.ModuleList(convlstm_layer)
         self.flatten = Flatten()
-        self.linear = torch.nn.Linear(256*16*2, 2)
+        self.linear2 = torch.nn.Linear(hidden_channels[-1]*(2 if self.bidirectional else 1)*16, 2)
     
     def forward(self, x):
         input_tensor = x
@@ -43,6 +44,6 @@ class ConvLSTMNetwork(torch.nn.Module):
             input_tensor, _, _ = self.convlstm_layer[i](input_tensor)
        
         out_flatten = self.flatten(input_tensor)
-        output = self.linear(out_flatten)
+        output = self.linear2(out_flatten)
         return output
     
