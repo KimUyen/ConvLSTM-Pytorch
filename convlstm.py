@@ -39,8 +39,8 @@ class ConvLSTMCell(nn.Module):
             Whether or not to add the bias.
         peephole: bool
             add connection between cell state to gates
-        batch_norm, linear_norm: bool
-            add batch normalization or 
+        layer_norm: bool
+            layer normalization 
         """
 
         super(ConvLSTMCell, self).__init__()

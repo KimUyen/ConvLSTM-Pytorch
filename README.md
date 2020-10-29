@@ -21,6 +21,7 @@ convlstm_decoder.py contains an example of defining a ConvLSTM decoder.
 Here is an example of defining 1 layer bidirectional ConvLSTM:
 ```
         convlstm_layer = []
+        img_size_list=[(10, 10)]
         num_layers = 1              # number of layer
         input_channel = 96          # the number of electrodes in Utah array
         hidden_channels = [256]     # the output channels for each layer
@@ -28,7 +29,8 @@ Here is an example of defining 1 layer bidirectional ConvLSTM:
         stride = [(1, 1)]           # the stride size of cnn for each layer
         padding = [(0, 0)]          # padding size of cnn for each layer
         for i in range(num_layers):
-            layer = convlstm.ConvLSTM(input_dim=input_channel, 
+            layer = convlstm.ConvLSTM(img_size=img_size_list[i],
+                                        input_dim=input_channel, 
                                          hidden_dim=hidden_channels[i],
                                          kernel_size=kernel_size[i],
                                          stride=stride[i],
@@ -38,7 +40,6 @@ Here is an example of defining 1 layer bidirectional ConvLSTM:
                                          batch_first=True, 
                                          bias=True, 
                                          peephole=False, 
-                                         batch_norm=False,
                                          layer_norm=False,
                                          return_sequence=True,
                                          bidirectional=True)
