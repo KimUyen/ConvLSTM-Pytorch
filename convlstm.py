@@ -10,7 +10,7 @@ import math
 class HadamardProduct(nn.Module):
     def __init__(self, shape):
         super(HadamardProduct, self).__init__()
-        self.weights = nn.Parameter(torch.Tensor(shape)).cuda()
+        self.weights = nn.Parameter(torch.rand(shape)).cuda()
         
     def forward(self, x):
         return x*self.weights
@@ -69,9 +69,9 @@ class ConvLSTMCell(nn.Module):
                                   bias=self.bias)
         
         if self.peephole is True:
-            self.weight_ci = HadamardProduct((1, self.hidden_dim, ) + self.input_shape)
-            self.weight_cf = HadamardProduct((1, self.hidden_dim, ) + self.input_shape)
-            self.weight_co = HadamardProduct((1, self.hidden_dim, ) + self.input_shape)
+            self.weight_ci = HadamardProduct((1, self.hidden_dim, self.out_height, self.out_width))
+            self.weight_cf = HadamardProduct((1, self.hidden_dim, self.out_height, self.out_width))
+            self.weight_co = HadamardProduct((1, self.hidden_dim, self.out_height, self.out_width))
             self.layer_norm_ci = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
             self.layer_norm_cf = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
             self.layer_norm_co = nn.LayerNorm([self.hidden_dim, self.out_height, self.out_width])
