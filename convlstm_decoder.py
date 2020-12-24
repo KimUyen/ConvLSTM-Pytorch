@@ -9,7 +9,7 @@ class Flatten(torch.nn.Module):
         return input.view(b, seq_len, -1)
 
 class ConvLSTMNetwork(torch.nn.Module):
-    def __init__(self, img_size_list, input_channel, hidden_channels, kernel_size, stride, padding, num_layers, bidirectional = False):
+    def __init__(self, img_size_list, input_channel, hidden_channels, kernel_size, num_layers, bidirectional = False):
         super(ConvLSTMNetwork, self).__init__()
         
         self.hidden_channels = hidden_channels
@@ -22,8 +22,6 @@ class ConvLSTMNetwork(torch.nn.Module):
                                     input_channel, 
                                     hidden_channels[i],
                                     kernel_size[i],
-                                    stride[i],
-                                    padding[i],
                                     0.2, 0.,
                                     batch_first=True, 
                                     bias=True, 

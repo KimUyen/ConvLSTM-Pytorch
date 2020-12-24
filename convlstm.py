@@ -17,8 +17,8 @@ class HadamardProduct(nn.Module):
 
 class ConvLSTMCell(nn.Module):
 
-    def __init__(self, img_size, input_dim, hidden_dim, kernel_size, stride, 
-                 padding, cnn_dropout, rnn_dropout, bias=True, peephole=False,
+    def __init__(self, img_size, input_dim, hidden_dim, kernel_size, 
+                 cnn_dropout, rnn_dropout, bias=True, peephole=False,
                  layer_norm=False):
         """
         Initialize ConvLSTM cell.
@@ -30,8 +30,6 @@ class ConvLSTMCell(nn.Module):
             Number of channels of hidden state.
         kernel_size: (int, int)
             Size of the convolutional kernel for both cnn and rnn.
-        stride, padding: (int, int)
-            Stride and padding for convolutional input tensor.
         cnn_dropout, rnn_dropout: float
             cnn_dropout: dropout rate for convolutional input.
             rnn_dropout: dropout rate for convolutional state.
@@ -48,8 +46,8 @@ class ConvLSTMCell(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
-        self.padding = padding
-        self.stride = stride
+        self.padding = (int(self.kernel_size[0]/2), int(self.kernel_size[1]/2))
+        self.stride = (1, 1)
         self.bias = bias
         self.peephole = peephole
         self.layer_norm = layer_norm
@@ -136,8 +134,6 @@ class ConvLSTM(nn.Module):
         input_dim: Number of channels in input
         hidden_dim: Number of hidden channels
         kernel_size: Size of kernel in convolutions
-        stride, padding: (int, int)
-            Stride and padding for convolutional input tensor.
         cnn_dropout, rnn_dropout: float
             cnn_dropout: dropout rate for convolutional input.
             rnn_dropout: dropout rate for convolutional state.
@@ -153,12 +149,12 @@ class ConvLSTM(nn.Module):
     Example:
         >> x = torch.rand((32, 10, 64, 128, 128))
         >> convlstm = ConvLSTM(input_dim=64, hidden_dim=16, kernel_size=(3, 3), 
-                               stride=(1, 1), padding=(1, 1), cnn_dropout = 0.2,
+                               cnn_dropout = 0.2,
                                rnn_dropout=0.2, batch_first=True, bias=False)
         >> output, last_state = convlstm(x)
     """
 
-    def __init__(self, img_size, input_dim, hidden_dim, kernel_size, stride, padding, 
+    def __init__(self, img_size, input_dim, hidden_dim, kernel_size,
                  cnn_dropout=0.5, rnn_dropout=0.5,  
                  batch_first=False, bias=True, peephole=False,
                  layer_norm=False,
@@ -171,20 +167,28 @@ class ConvLSTM(nn.Module):
         self.return_sequence = return_sequence
         self.bidirectional = bidirectional
 
-        cell_list = ConvLSTMCell(img_size = img_size,
+        cell_fw = ConvLSTMCell(img_size = img_size,
                                  input_dim=input_dim,
                                  hidden_dim=hidden_dim,
                                  kernel_size=kernel_size,
-                                 stride = stride,
-                                 padding = padding,
                                  cnn_dropout=cnn_dropout,
                                  rnn_dropout=rnn_dropout,
                                  bias=bias,
                                  peephole=peephole,
                                  layer_norm=layer_norm)
-
-        self.cell_list = cell_list
+        self.cell_fw = cell_fw
         
+        if self.bidirectional is True:
+            cell_bw = ConvLSTMCell(img_size = img_size,
+                                     input_dim=input_dim,
+                                     hidden_dim=hidden_dim,
+                                     kernel_size=kernel_size,
+                                     cnn_dropout=cnn_dropout,
+                                     rnn_dropout=rnn_dropout,
+                                     bias=bias,
+                                     peephole=peephole,
+                                     layer_norm=layer_norm)
+            self.cell_bw = cell_bw
 
     def forward(self, input_tensor, hidden_state=None):
         """
@@ -209,16 +213,16 @@ class ConvLSTM(nn.Module):
             raise NotImplementedError()
         else:
             # Since the init is done in forward. Can send image size here
-            hidden_state = self._init_hidden(batch_size=b)
-            if self.bidirectional is True:
-                hidden_state_inv = self._init_hidden(batch_size=b)
+            hidden_state, hidden_state_inv = self._init_hidden(batch_size=b)
+            # if self.bidirectional is True:
+            #     hidden_state_inv = self._init_hidden(batch_size=b)
 
         ## LSTM forward direction
         input_fw = input_tensor
         h, c = hidden_state
         output_inner = []
         for t in range(seq_len):
-            h, c = self.cell_list(input_tensor=input_fw[:, t, :, :, :],
+            h, c = self.cell_fw(input_tensor=input_fw[:, t, :, :, :],
                                              cur_state=[h, c])
             
             output_inner.append(h)
@@ -234,7 +238,7 @@ class ConvLSTM(nn.Module):
             h_inv, c_inv = hidden_state_inv
             output_inv = []
             for t in range(seq_len-1, -1, -1):
-                h_inv, c_inv = self.cell_list(input_tensor=input_inv[:, t, :, :, :],
+                h_inv, c_inv = self.cell_bw(input_tensor=input_inv[:, t, :, :, :],
                                                  cur_state=[h_inv, c_inv])
                 
                 output_inv.append(h_inv)
@@ -247,5 +251,8 @@ class ConvLSTM(nn.Module):
         return layer_output if self.return_sequence is True else layer_output[:, -1:], last_state, last_state_inv if self.bidirectional is True else None
 
     def _init_hidden(self, batch_size):
-        init_states = self.cell_list.init_hidden(batch_size)
-        return init_states
+        init_states_fw = self.cell_fw.init_hidden(batch_size)
+        init_states_bw = None
+        if self.bidirectional is True:
+            init_states_bw = self.cell_bw.init_hidden(batch_size)
+        return init_states_fw, init_states_bw
